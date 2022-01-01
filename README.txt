@@ -5,6 +5,9 @@ https://github.com/packtpublishing/apache-kafka-series---learn-apache-kafka-for-
 Twitter keys:
 C:\Users\jomesa\kafka_2.13-2.8.1\Twitter
 
+Elasticsearch:
+https://app.bonsai.io/clusters/kafka-course-4006345810?hsmd=tail&hswd=900000&hstw=86400000
+
 ##########################################################################################
 INITIAL CONFIGURATION
 
@@ -35,10 +38,7 @@ TOPICS
 	kafka-topics.bat --zookeeper 127.0.0.1:2181
 
 # Create a topic
-	kafka-topics.bat --zookeeper 127.0.0.1:2181 --topic first_topic --create --partitions 3 --replication-factor 1
-
-		# Create topi for Twitter
-		kafka-topics.bat --zookeeper 127.0.0.1:2181 --topic twitter_tweets --create --partitions 6 --replication-factor 1
+	kafka-topics.bat --zookeeper 127.0.0.1:2181 --topic first_topic --create --partitions 3 --replication-factor 1	
 
 # List topic
 	kafka-topics.bat --zookeeper 127.0.0.1:2181 --list
@@ -109,6 +109,9 @@ list all consumer groups, describe a consumer group, delete consumer group info,
 # Describe a consumer group
 	kafka-consumer-groups.bat --bootstrap-server 127.0.0.1:9092 --describe --group my-first-application
 
+
+		kafka-consumer-groups.bat --bootstrap-server 127.0.0.1:9092 --group kafka-demo-elasticsearch --describe
+
 # Reset the offset to a consumer group for a topic
 	kafka-consumer-groups.bat --bootstrap-server localhost:9092 --group my-first-application --reset-offsets --to-earliest --execute --topic first_topic
 
@@ -128,14 +131,23 @@ kafka-topics.bat --zookeeper 127.0.0.1:2181 --topic first_topic --create --parti
 
 kafka-console-consumer.bat --bootstrap-server 127.0.0.1:9092 --topic first_topic --group my-third-application
 
+##########################################################################################
+TWITTER SPECIFIC
+
+# Create topi for Twitter
+kafka-topics.bat --zookeeper 127.0.0.1:2181 --topic twitter_tweets --create --partitions 6 --replication-factor 1
+
+# Create twitter console consumer
+kafka-console-consumer.bat --bootstrap-server 127.0.0.1:9092 --topic twitter_tweets
 
 
+##########################################################################################
 
 VOCABULARY
 
-Partitions
-Replication
-Keys
+----------
+BASIC
+----------
 
 Topic
 A user-defined category to which messages are published. Topics consist of one or more partitions, ordered, immutable sequences of messages to which Kafka appends new messages. Each message in a topic is assigned a unique, sequential ID called an offset.
@@ -177,4 +189,163 @@ This helps to store a replica of the data in another broker from where the user 
 
 Keys
 Messages for a topic with the same key goes to the same partition.
+
+Close
+"producer.close" -> It sends all the messages that have not been processed by the producer to the Kafka server before the producer shuts down.
+
+---------------------
+PRODUCER FINE TUNE
+---------------------
+
+ACK
+Acknowlege from the consumer once they recevie a message
+	ack = 0 (no acks)
+		No response is requested
+		If the broker goes offline or an exception happens, we won't know and will lose data
+			Useful for data where it's okay to potentially lose messages:
+				Metrics collection
+				Log collection
+	ack = 1
+		Only leader acknowledge
+		Can present data los
+
+	ack = all
+		All the leader and replicas should ackowledge
+		No data lost
+		More latency
+
+		Goes in clunjuction with "min.insync.replicas"
+			min.insync.replicas = 2   => at least 2 brokers that are ISR must acknowledge
+
+		Example:
+			replication.factor=3; min.insync=2; acks=all
+				=> only tolerate 1 broker going down, otherwise the producer will receive an exception on send.
+	
+----------------
+Producer “retries”
+NOTE * If you are using Kafka >= 1.0.0 there is a better solution with indempotent producers!
+	Retries when a failure while producing a message
+	Default settins:
+		0 for kafka <= 2.0
+		2147483647 for kafka > 2.1
+
+  Goes in conjunction with “retry.backoff.ms” 
+	Each retry will be sent every “retry.backoff.ms” milliseconds
+	Default setting:
+		100 ms
+
+  And “delivery.timeout.ms” 
+	Preferable way for controlling retry behaviour, the producer will retry until the “delivery.timeout.ms” is met
+
+----------------
+
+
+Indempotent Producer (BETTER APROACH THAN retries)
+
+producerProps.pup(“enable.indempotence”, true);
+
+The default configuration includes (Advice use de defaults or study this more carefully):
+
+	retries = 2174483647
+	max.in.flight.request = 5
+	acks=all
+
+* max.in.flight.request. The maximum number of unacknowledged requests the client will send on a single connection before blocking. Note that if this config is set to be greater than 1 and enable.idempotence is set to false, there is a risk of message re-ordering after a failed send due to retries (i.e., if retries are enabled).
+
+	Example explicit properties:
+	        // create safe producer
+        	properties.setProperty(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
+        	properties.setProperty(ProducerConfig.ACKS_CONFIG, "all");
+        	properties.setProperty(ProducerConfig.RETRIES_CONFIG, Integer.toString(Integer.MAX_VALUE));
+        	properties.setProperty(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, "5");
+
+Message Compression
+	compression.type
+		none
+		gzip
+		lz4
+		snappy
+	Recommended:
+		snappy or lz4 for optimal speed / compression ration
+
+	linger.ms: number of milliseconds a producer is willing to wait before sending a batch out. (default 0). If you increase it you can get a better troughtput, see slides
+
+	batch.size: maximum number of bytes that will be included in a batch. The default is 16KB
+---------------------
+CONSUMER FINE TUNE
+---------------------
+
+Delifery Semantics 
+
+	At Most One
+		offsets are committed as soon as the message batch is received. If the processing goes wrong, the message will be lost (it won't be read again).
+
+	At Least One (Default behavior, recommended with indempotent)
+		offsets are commited after the message is processed. If processing goes wrong, the message will be read again. This can result in duplicate processing of messages.
+		Make sure your processing is indempotent (i.e. processing again the messages won't impact your systems)
+
+
+		In decode you need to define an Id for inserting, in order to get indempotency:
+
+		        // Two strategies to generate the id:
+        	        // 1. kafka generic ID
+                	//String id = record.topic() + "_" + record.partition() + "_" + record.offset();
+
+	                // 2. Twitter feed specific
+        	        /// String id = extractIdFromTweet(record.value());
+
+		And then use the defined ID:
+
+	                // where we insert data into ElasticSearch
+        	        IndexRequest indexRequest = new IndexRequest(
+                	        "twitter",
+                        	"tweets",
+	                        id // this is to make our consumer idempotent
+        	        ).source(jsonString, XContentType.JSON);
+
+
+Consumer Poll Behavior 
+
+	(It is not recommended to change them at least you have a good optimization reason)
+
+		fetch.min.bytes (default 1)
+		max.poll.records (default 500)
+		max.partitions.fetch.bytes (default 1MB)
+		fetch.max.bytes (default 50 MB)
+
+Consumer Offset Commits Strategies
+
+	enable.auto.commit = true & synchronous processing of batches
+		Could be risky because you Will be in “at-most-once” behavior because offsets Will be committed before your data is processed
+
+	enable.auto.commit = false & synchronous processing of batches
+		It is better because you only commit after your data is proccessed
+
+		In the code you should:
+			// disable auto commit of offsets
+			properties.setProperty(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false"); 
+
+			// Commit once processed all the poll lote	
+			consumer.commitSync();
+
+BulkRequest
+	Helps you to read from kafka multiple records at once helping to improve throughput. See in the code the example:
+		BulkRequest bulkRequest = new BulkRequest();
+
+Replaying data for consumeros
+
+	Take all the consumers from a specific group down		
+		kafka-consumer-groups.bat --bootstrap-server 127.0.0.1:9092 --group kafka-demo-elasticsearch --describe		
+	Use Kafka-consumer-groups command to set offset to what you want		
+	Restart Consumers
+		kafka-consumer-groups.bat --bootstrap-server 127.0.0.1:9092 --group kafka-demo-elasticsearch --reset-offsets --execute --to-earliest --topic twitter_tweets
+
+	Bottom line
+		Set proper data retention period & offset retention period
+		Ensure auto offset reset gehavior is hte one you expect /want
+			erlieast
+			latest
+			none
+		Use replay capability in case of unexpected behavior
+			
 
