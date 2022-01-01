@@ -1,5 +1,7 @@
 package com.github.joselume.kafka.tutorial3;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import org.apache.http.HttpHost;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.UsernamePasswordCredentials;
@@ -38,16 +40,30 @@ public class ElasticSearchConsumer {
         while(true){
             ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(100));
             for(ConsumerRecord record: records){
+
+                // Two strategies to generate the id:
+                // 1. kafka generic ID
+                //String id = record.topic() + "_" + record.partition() + "_" + record.offset();
+
+                // 2. Twitter feed specific
+                /// String id = extractIdFromTweet(record.value());
+
+                JsonObject tweetJsonObject = getTweetJsonObject(String.valueOf(record.value()));
+                String id = tweetJsonObject.get("id_str").getAsString();
+                String createdAt = tweetJsonObject.get("created_at").getAsString();
+                String text = tweetJsonObject.get("text").getAsString();
+                String jsonString = "{\"id_str\": \""+id+"\", \"created_at\": \""+createdAt+"\"}";
+
                 // where we insert data into ElasticSearch
                 IndexRequest indexRequest = new IndexRequest(
                         "twitter",
-                        "tweets"
-                ).source("{\"tweet\": \"test\"}", XContentType.JSON);
+                        "tweets",
+                        id // this is to make our consumer idempotent
+                ).source(jsonString, XContentType.JSON);
                 // Reference: Consumer Part 2 - Write the Consumer and Send to Elasticsearch
                 // I should be using "record.value()" instead, but the maximum deep was failing.
                 IndexResponse indexResponse = client.index(indexRequest, RequestOptions.DEFAULT);
-                String id = indexResponse.getId();
-                logger.info(id);
+                logger.info(indexResponse.getId());
                 try {
                     Thread.sleep(1000);
                 } catch (InterruptedException e) {
@@ -59,6 +75,23 @@ public class ElasticSearchConsumer {
         // close the client gracefully
         // client.close();
     }
+
+    private static JsonParser jsonParser = new JsonParser();
+
+    private static String extractIdFromTweet(String tweetJson){
+        // gson library
+        return jsonParser.parse(tweetJson)
+                .getAsJsonObject()
+                .get("id_str")
+                .getAsString();
+    }
+
+    private static JsonObject getTweetJsonObject(String tweetJson){
+        // gson library
+        return jsonParser.parse(tweetJson)
+                .getAsJsonObject();
+    }
+
 
     public static RestHighLevelClient createClient() {
 
