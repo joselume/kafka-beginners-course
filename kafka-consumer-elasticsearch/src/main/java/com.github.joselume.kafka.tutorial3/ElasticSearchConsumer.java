@@ -6,6 +6,11 @@ import org.apache.http.auth.UsernamePasswordCredentials;
 import org.apache.http.client.CredentialsProvider;
 import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.apache.http.impl.nio.client.HttpAsyncClientBuilder;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.serialization.StringDeserializer;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.index.IndexResponse;
 import org.elasticsearch.client.RequestOptions;
@@ -17,8 +22,43 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.time.Duration;
+import java.util.Arrays;
+import java.util.Properties;
 
 public class ElasticSearchConsumer {
+
+    public static void main(String[] args) throws IOException {
+        Logger logger = LoggerFactory.getLogger(ElasticSearchConsumer.class.getName());
+        RestHighLevelClient client = createClient();
+
+        KafkaConsumer<String, String> consumer = createConsumer("twitter_tweets");
+
+        // poll for new data
+        while(true){
+            ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(100));
+            for(ConsumerRecord record: records){
+                // where we insert data into ElasticSearch
+                IndexRequest indexRequest = new IndexRequest(
+                        "twitter",
+                        "tweets"
+                ).source("{\"tweet\": \"test\"}", XContentType.JSON);
+                // Reference: Consumer Part 2 - Write the Consumer and Send to Elasticsearch
+                // I should be using "record.value()" instead, but the maximum deep was failing.
+                IndexResponse indexResponse = client.index(indexRequest, RequestOptions.DEFAULT);
+                String id = indexResponse.getId();
+                logger.info(id);
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+        // close the client gracefully
+        // client.close();
+    }
 
     public static RestHighLevelClient createClient() {
 
@@ -44,23 +84,21 @@ public class ElasticSearchConsumer {
         return client;
     }
 
-    public static void main(String[] args) throws IOException {
-        Logger logger = LoggerFactory.getLogger(ElasticSearchConsumer.class.getName());
-        RestHighLevelClient client = createClient();
+    public static KafkaConsumer<String, String> createConsumer(String topic){
+        String bootstrapServers = "127.0.0.1:9092";
+        String groupId = "kafka-demo-elasticsearch";
 
-        String jsonString = "{ \"foo\": \"bar\" }";
+        // create consumer properties
+        Properties properties = new Properties();
+        properties.setProperty(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        properties.setProperty(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        properties.setProperty(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        properties.setProperty(ConsumerConfig.GROUP_ID_CONFIG, groupId);
+        properties.setProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest"); // earliest, latest, none
 
-        IndexRequest indexRequest = new IndexRequest(
-                "twitter",
-                "tweets"
-        ).source(jsonString, XContentType.JSON);
-
-        IndexResponse indexResponse = client.index(indexRequest, RequestOptions.DEFAULT);
-        String id = indexResponse.getId();
-
-        logger.info(id);
-
-        // close the client gracefully
-        client.close();
+        // create consumer
+        KafkaConsumer<String, String> consumer = new KafkaConsumer<String, String>(properties);
+        consumer.subscribe(Arrays.asList(topic));
+        return consumer;
     }
 }
