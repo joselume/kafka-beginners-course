@@ -37,6 +37,9 @@ TOPICS
 # Create a topic
 	kafka-topics.bat --zookeeper 127.0.0.1:2181 --topic first_topic --create --partitions 3 --replication-factor 1
 
+		# Create topi for Twitter
+		kafka-topics.bat --zookeeper 127.0.0.1:2181 --topic twitter_tweets --create --partitions 6 --replication-factor 1
+
 # List topic
 	kafka-topics.bat --zookeeper 127.0.0.1:2181 --list
 
